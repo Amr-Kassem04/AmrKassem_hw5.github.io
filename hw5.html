@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>UNM CS 412/512 HW3</title>
+  <style>
+    body {
+      background: #111;
+      color: #5dd226;
+      font-family: "Pixelify Sans";
+
+      
+    }
+
+    button {
+      font-family: "Pixelify Sans";
+      color: #5dd226;
+      background-color: rgba(255, 0, 0, 0);
+      border: dotted #5dd226;
+
+
+    }
+
+    canvas {
+      border: 5px solid #444;
+      background: #000000;
+    }
+  </style>
+
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <h2>Geometry Dodge</h2>
+  <p>Welcome to geometry dogde!<br> <br>
+  You play as a cube and your goal is to dodge   <br>
+ the moving shapes for as long as possible.<br> <br>
+ Use the left and right arrow keys to move the square across the screen.<br><br>
+Use the speed slider to decrease or increase speed.<br><br>
+Try to get the highest score you can!</p>
+<div style="display: flex; flex-direction: column; align-items: center;">
+  <canvas id="glcanvas" width="400" height="400"></canvas>
+  <div style="display: flex; gap: 15px; align-items: center; margin-top: 10px;">
+    <div>Score: <span id="score">0</span></div>
+    <button id="restartBtn">Restart</button>
+    <label for="speedSlider">Speed:</label>
+    <input type="range" id="speedSlider" min="0.1" max="2" step="0.1" value="1">
+    <span id="speedValue">1.0x</span>
+  </div>
+</div>
+
+
+  <!-- Vertex shader -->
+<script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+in vec3 aPosition;
+in vec3 aColor;
+in vec3 aNormal;
+in vec2 aTexCoord;
+
+
+uniform float uTime;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform mat4 uModelTransformationMatrix;
+uniform mat4 uNormalMatrix; 
+
+out vec3 vColor;
+out vec3 vNormal; 
+out vec3 vFragPos;
+out vec2 vTexCoord;  
+
+void main() {
+  vec4 worldPos = uModelViewMatrix * uModelTransformationMatrix * vec4(aPosition, 1.0);
+  gl_Position = uProjectionMatrix * worldPos;
+  
+  vColor = aColor;
+  vFragPos = worldPos.xyz;
+  vNormal = mat3(uNormalMatrix) * aNormal;
+  vTexCoord = aTexCoord;
+}
+</script>
+
+  <!-- Fragment Shader -->
+<script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+precision mediump float;
+
+in vec3 vColor;
+in vec3 vNormal;
+in vec3 vFragPos;
+in vec2 vTexCoord;
+
+uniform vec3 uLightPos;
+uniform vec3 uLightPos2;
+uniform vec3 uViewPos;
+uniform vec3 uLightColor;
+uniform vec3 uLightColor2;    
+uniform float uAmbientStrength;
+uniform float uDiffuseStrength;
+uniform float uSpecularStrength;
+uniform float uShininess;
+
+uniform sampler2D uTex;
+uniform sampler2D uBumpTex;
+uniform bool uUseBump;
+uniform float uBumpStrength;
+
+out vec4 fragColor;
+
+vec3 calculateLight(vec3 lightPos, vec3 lightColor, vec3 norm, vec3 viewDir) {
+  vec3 lightDir = normalize(lightPos - vFragPos);
+  float diff = max(dot(norm, lightDir), 0.0);
+  vec3 diffuse = uDiffuseStrength * diff * lightColor;
+  
+  vec3 reflectDir = reflect(-lightDir, norm);
+  float spec = pow(max(dot(viewDir, reflectDir), 0.0), uShininess);
+  vec3 specular = uSpecularStrength * spec * lightColor;
+  
+  return diffuse + specular;
+}
+
+void main() {
+  vec3 ambient = uAmbientStrength * uLightColor;
+  
+  vec3 norm = normalize(vNormal);
+
+  if (uUseBump) {
+    float h  = texture(uBumpTex, vTexCoord).r;
+    float hu = texture(uBumpTex, vTexCoord + vec2(0.01, 0.0)).r;
+    float hv = texture(uBumpTex, vTexCoord + vec2(0.0, 0.01)).r;
+
+  vec3 grad = vec3((h - hu) * uBumpStrength,
+                  (h - hv) * uBumpStrength,
+                  1.0);
+
+    norm = normalize(norm + grad);
+  }
+
+  vec3 viewDir = normalize(uViewPos - vFragPos);
+  
+  vec3 light1 = calculateLight(uLightPos, uLightColor, norm, viewDir);
+  vec3 light2 = calculateLight(uLightPos2, uLightColor2, norm, viewDir);
+  
+  vec3 texColor = texture(uTex, vTexCoord).rgb;
+
+  vec3 result = (ambient + light1 + light2) * (vColor * texColor);
+  fragColor = vec4(result, 1.0);
+}
+</script>
+
+<script src="primitives.js"></script>
+<script src="transformations.js"></script>
+
+
+<script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    // WebGL setup
+    const canvas = document.getElementById("glcanvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 not supported");
+
+    let program, posLoc, colorLoc, uMVM, uPM, uMTM;
+    let normalLoc, uNormalMatrix, uLightPos, uLightPos2, uViewPos, uLightColor, uLightColor2;
+    let uAmbientStrength, uSpecularStrength, uShininess, uDiffuseStrength;
+    let count = 0;
+    let step = 3;
+    let dead = 0;
+    let cubeX = 0;
+    let swing = 0;
+    let modelViewMatrix;
+
+
+    let rot = 0;
+    let rot_speed = 0.05; 
+
+    let score = 0;
+
+    const textures = {
+      cube: loadTexture('https://i.imgur.com/uMyl4LU.png'),
+      sphere: loadTexture('https://i.imgur.com/5gen7ae.jpeg'),
+      cylinder: loadTexture('https://i.imgur.com/1E0khs7.jpeg'),
+      donut: loadTexture('https://i.imgur.com/uYrWht7.jpeg'),
+      //floor: loadTexture('textures/grid.png')
+    };
+
+    const floorVideo = document.createElement('video');
+    floorVideo.src = 'https://i.imgur.com/rcPMVGR.mp4';
+    floorVideo.crossOrigin = "anonymous"; 
+    floorVideo.loop = true;
+    floorVideo.muted = true;
+    floorVideo.playbackRate = 3;
+    floorVideo.play();
+
+
+    const floorTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+    const floorPixel = new Image();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, floorPixel);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+
+    let cubeBuffers = createBuffers(Cpos, Ccol, Cind, Cnorm, Ctex, textures.cube);
+    let cubeBuffers2 = createBuffers(Cpos, Ccol2, Cind, Cnorm, Ctex);
+    let cubeBuffers3 = createBuffers(Cpos, Ccol3, Cind, Cnorm, Ctex);
+    let sphereBuffers = createBuffers(Svert, Scol, Sind, Snorm, Stex, textures.sphere);
+    let cylbuffer = createBuffers(cylvert, cylcol, cylind, cylnorm, cyltex, textures.cylinder);
+    let donbuffer = createBuffers(Dvert, Dcol, Dind, Dnorm, Dtex, textures.donut);
+    let handBuffer = createBuffers(Svert, Hcol, Sind, Snorm, Dtex);
+    let planeBuffer = createBuffers(Pvert, Pcol, Pind, Pnorm, Ptex, floorTexture);
+
+
+    function loadTexture(url) {
+      const texture = gl.createTexture();      
+      const image = new Image();
+      image.crossOrigin = "anonymous"; 
+      image.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      };
+      image.src = url;
+      
+      return texture;
+    }
+
+
+
+    let xleft = -20;
+    let xmid = 0;
+    let xright = 20;
+
+    let objects = [
+      {buffer: sphereBuffers, x: 0, y: -2, z:-100, speed: 1.5, xspeed: 0, xang: 0.26},
+      {buffer: cylbuffer, x: 20, y: -3, z:-100, speed: 1, xspeed: 0,xang: 0.175},
+      {buffer: donbuffer, x: -20, y: -2, z:-100, speed: 0.7, xspeed: 0,xang: 0.12},
+    ];
+    let gameSpeed = 1.0;
+    let scale = 1;
+
+    function createBuffers(vert, color, index, normals, tCoords, texture) {  
+      let vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vert), gl.STATIC_DRAW);
+
+      let nbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(color), gl.STATIC_DRAW);
+      
+      let normBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+
+      let ibo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); 
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(index), gl.STATIC_DRAW);
+
+      let tbo = null;
+      if (tCoords) {
+        tbo = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, tbo);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tCoords), gl.STATIC_DRAW);
+      }
+      
+      return { vbo, nbo, normBuf, ibo, tbo, texture, count: index.length };  
+    }
+
+
+
+    function drawShape(buffer) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer.vbo);
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer.nbo);
+  gl.enableVertexAttribArray(colorLoc);
+  gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+  
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer.normBuf);
+  gl.enableVertexAttribArray(normalLoc);
+  gl.vertexAttribPointer(normalLoc, 3, gl.FLOAT, false, 0, 0);
+
+  if (buffer.tbo) {
+    const aTexCoord = gl.getAttribLocation(program, "aTexCoord");
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer.tbo);
+    gl.enableVertexAttribArray(aTexCoord);
+    gl.vertexAttribPointer(aTexCoord, 2, gl.FLOAT, false, 0, 0);
+  }
+
+  if (buffer.texture) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, buffer.texture);
+    gl.uniform1i(gl.getUniformLocation(program, "uTex"), 0);
+  }
+
+  if (buffer==cubeBuffers||buffer==cubeBuffers2||buffer==cubeBuffers3) {
+      gl.uniform1i(gl.getUniformLocation(program, "uUseBump"), 1);
+      gl.uniform1f(gl.getUniformLocation(program, "uBumpStrength"), 5.0);
+    } else {
+      gl.uniform1i(gl.getUniformLocation(program, "uUseBump"), 0);
+    }
+
+  //gl.uniform1i(gl.getUniformLocation(program, "uUseBump"), 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer.ibo);
+  gl.drawElements(gl.TRIANGLES, buffer.count, gl.UNSIGNED_SHORT, 0);
+}
+
+
+    function genObject(obj) {
+      let model = mat4Identity();
+      model = mat4Translate(model, [obj.x, obj.y, obj.z]);
+      if(obj.buffer != sphereBuffers){
+        model = mat4RotateX(model, rot);
+      }
+
+
+      model = mat4Scale(model, [scale, scale, scale]); 
+      gl.uniformMatrix4fv(uMTM, false, model);
+      
+      let normalMatrix = computeNormalMatrix(modelViewMatrix, model);
+      gl.uniformMatrix4fv(uNormalMatrix, false, normalMatrix);
+      drawShape(obj.buffer);
+    }
+
+    
+function initShaderProgram() {
+  try {
+    const vsSource = document.getElementById("vertex-shader").textContent;
+    const fsSource = document.getElementById("fragment-shader").textContent;
+    program = createProgram(gl, vsSource, fsSource);
+    gl.useProgram(program);
+    posLoc = gl.getAttribLocation(program, "aPosition");
+    colorLoc = gl.getAttribLocation(program, "aColor");
+    normalLoc = gl.getAttribLocation(program, "aNormal"); 
+    
+    timeLoc = gl.getUniformLocation(program, "uTime");
+    uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
+    uPM = gl.getUniformLocation(program, "uProjectionMatrix");
+    uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
+    uNormalMatrix = gl.getUniformLocation(program, "uNormalMatrix"); 
+    
+    uLightPos = gl.getUniformLocation(program, "uLightPos");
+    uLightColor = gl.getUniformLocation(program, "uLightColor");
+
+    uLightPos2 = gl.getUniformLocation(program, "uLightPos2");
+    uLightColor2 = gl.getUniformLocation(program, "uLightColor2");
+
+    uViewPos = gl.getUniformLocation(program, "uViewPos");
+
+    uAmbientStrength = gl.getUniformLocation(program, "uAmbientStrength");
+    uDiffuseStrength = gl.getUniformLocation(program, "uDiffuseStrength");
+    uSpecularStrength = gl.getUniformLocation(program, "uSpecularStrength");
+    uShininess = gl.getUniformLocation(program, "uShininess");
+
+
+  } catch (e) { console.error(e); }
+}
+
+    initShaderProgram();
+
+
+
+
+    document.addEventListener('keydown', e => {
+      switch (e.key) {
+        case 'ArrowLeft':
+        if(count != -1){
+          cubeX -= step;
+          count--; 
+        }   
+        break;
+        case 'ArrowRight':
+          if(count != 1){
+          cubeX += step;
+          count++; 
+        }    
+ 
+        break;
+
+      }
+    });
+
+function updateScore() {
+  document.getElementById("score").textContent = score;
+}
+
+setInterval(() => {
+  score++;
+  if(dead == 0){
+      updateScore();
+  }
+}, 200);
+
+
+document.getElementById("restartBtn").addEventListener("click", () => {
+  floorVideo.playbackRate = 3;
+  score = 0;
+  dead = 0;
+  step = 3;
+  rot_speed = 0.05;
+  cubeX = 0;
+  count = 0;
+  scale = 1;
+  updateScore();
+    objects[0].speed = 1.5;
+  objects[1].speed = 1.0;
+  objects[2].speed = 0.7;
+  for(let obj of objects){
+    obj.z = -100;
+    positions(obj);
+  }
+
+});
+
+const speedSlider = document.getElementById("speedSlider");
+const speedValue = document.getElementById("speedValue");
+
+speedSlider.addEventListener("input", () => {
+  gameSpeed = parseFloat(speedSlider.value);
+  speedValue.textContent = gameSpeed.toFixed(1) + "x";
+});
+
+
+    let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
+    let f = 1 / Math.tan(fov / 2);
+    let proj = new Float32Array([
+      f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (zFar + zNear) / (zNear - zFar), -1, 0, 0, (2 * zFar * zNear) / (zNear - zFar), 0
+    ]);
+
+    function Node(buffers) {
+      this.buffers = buffers;      
+      this.children = [];
+      this.localMatrix = mat4Identity();   
+      this.worldMatrix = mat4Identity();   
+    }
+
+    
+    let body = new Node(cubeBuffers);
+
+
+    let leftArm = new Node(cubeBuffers3);
+    let leftForearm = new Node(cubeBuffers2);
+    let rightArm = new Node(cubeBuffers3);
+    let rightForearm = new Node(cubeBuffers2);
+    let leftThigh = new Node(cubeBuffers2);
+    let leftLeg = new Node(cubeBuffers);
+    let rightThigh = new Node(cubeBuffers2);
+    let rightLeg = new Node(cubeBuffers);
+    let leftHand = new Node(handBuffer);
+    let rightHand = new Node(handBuffer);
+
+    body.children.push(leftArm, rightArm,leftThigh,rightThigh);
+    leftArm.children.push(leftForearm);
+    rightArm.children.push(rightForearm);
+    leftForearm.children.push(leftHand);
+    rightForearm.children.push(rightHand);
+    leftThigh.children.push(leftLeg);
+    rightThigh.children.push(rightLeg);
+
+
+
+
+
+function drawNode(node, parentWorldMatrix) {
+  let currentWorldMatrix = node.worldMatrix;
+  
+  if (parentWorldMatrix) {
+    currentWorldMatrix = multiplyMat4(parentWorldMatrix, currentWorldMatrix);
+  }
+  
+  let renderMatrix = multiplyMat4(currentWorldMatrix, node.localMatrix);
+  
+  gl.uniformMatrix4fv(uMTM, false, renderMatrix);
+  
+  let normalMatrix = computeNormalMatrix(modelViewMatrix, renderMatrix);
+  gl.uniformMatrix4fv(uNormalMatrix, false, normalMatrix);
+
+
+  
+  drawShape(node.buffers);
+
+  for (let child of node.children) {
+    drawNode(child, currentWorldMatrix);
+  }
+}
+
+
+  function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+  } 
+  function positions(obj){
+  let rand = getRandomInt(1,3);
+    switch(rand){
+      case 1:
+        obj.x = xleft;
+        obj.xspeed = obj.xang;
+      break;
+      case 2:
+        obj.x = xmid;
+        obj.xspeed = 0;
+      break;
+      case 3:
+        obj.x = xright;
+        obj.xspeed = -obj.xang;
+      break;
+    }
+  }
+
+  for(let obj of objects){
+    positions(obj);
+  }
+  
+    let startTime = Date.now();
+    function render() {
+      gl.enable(gl.DEPTH_TEST);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.uniform3f(uLightPos, -50, 5, -50);  
+      gl.uniform3f(uLightColor, 1.0, 1.0, 1.0);
+
+      gl.uniform3f(uLightPos2, 50, 5, -50);  
+      gl.uniform3f(uLightColor2, 1.0, 1.0, 1.0);
+
+      gl.uniform3f(uViewPos, 0, 1, -10);
+
+      gl.uniform1f(uAmbientStrength, 1.5);
+      gl.uniform1f(uDiffuseStrength, 0.8);
+      gl.uniform1f(uSpecularStrength, 10);
+      gl.uniform1f(uShininess, 10);
+
+
+      modelViewMatrix = mat4Identity();
+      let modelTransformationMatrix = mat4Identity();
+
+      modelViewMatrix = mat4Translate(modelViewMatrix, [0, 1, -10]); 
+      modelViewMatrix = mat4RotateX(modelViewMatrix, .1); 
+      
+
+
+      let deltaTime = Date.now() - startTime;
+
+      gl.uniform1f(timeLoc, deltaTime/1000.0);
+
+      gl.uniformMatrix4fv(uPM, false, proj);
+      gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+      gl.uniformMatrix4fv(uMTM, false, modelTransformationMatrix);
+
+
+      let t = Date.now() * 0.01;
+      if(dead == 1){
+        swing = 0;
+      } else {
+        swing = Math.sin(t) * 0.8;
+      }
+  body.worldMatrix = mat4Identity();
+  body.worldMatrix = mat4Translate(body.worldMatrix, [cubeX, -3, -1]);
+  body.worldMatrix = mat4RotateX(body.worldMatrix, -.2);
+  //body.worldMatrix = mat4RotateY(body.worldMatrix, 1.5);
+
+  body.localMatrix = mat4Identity();
+  
+  // LEFT ARM
+  leftArm.worldMatrix = mat4Identity();
+  leftArm.worldMatrix = mat4Translate(leftArm.worldMatrix, [-1.1, 0.2, 0]);
+  leftArm.worldMatrix = mat4RotateZ(leftArm.worldMatrix, -.8);
+  leftArm.worldMatrix = mat4RotateX(leftArm.worldMatrix, swing);
+  
+  leftArm.localMatrix = mat4Scale(mat4Identity(), [0.4, 0.6, 0.4]);
+  
+  // LEFT FOREARM
+  leftForearm.worldMatrix = mat4Identity();
+  leftForearm.worldMatrix = mat4Translate(leftForearm.worldMatrix, [0, -.8, 0]);
+  leftForearm.worldMatrix = mat4RotateX(leftForearm.worldMatrix, swing);
+  
+  leftForearm.localMatrix = mat4Scale(mat4Identity(), [0.25, 0.6, 0.25]);
+  
+  // LEFT HAND
+  leftHand.worldMatrix = mat4Identity();
+  leftHand.worldMatrix = mat4Translate(leftHand.worldMatrix, [0, -.6, 0]);
+  
+  leftHand.localMatrix = mat4Scale(mat4Identity(), [.5, .5, .5]);
+  
+  // RIGHT ARM - world matrix
+  rightArm.worldMatrix = mat4Identity();
+  rightArm.worldMatrix = mat4Translate(rightArm.worldMatrix, [1.1, 0.2, 0]);
+  rightArm.worldMatrix = mat4RotateZ(rightArm.worldMatrix, .8);
+  rightArm.worldMatrix = mat4RotateX(rightArm.worldMatrix, -swing);
+  
+  rightArm.localMatrix = mat4Scale(mat4Identity(), [0.4, 0.6, 0.4]);
+  
+  // RIGHT FOREARM - world matrix
+  rightForearm.worldMatrix = mat4Identity();
+  rightForearm.worldMatrix = mat4Translate(rightForearm.worldMatrix, [0, -.8, 0]);
+  rightForearm.worldMatrix = mat4RotateX(rightForearm.worldMatrix, -swing);
+  
+  rightForearm.localMatrix = mat4Scale(mat4Identity(), [0.25, 0.6, 0.25]);
+  
+  // RIGHT HAND - world matrix
+  rightHand.worldMatrix = mat4Identity();
+  rightHand.worldMatrix = mat4Translate(rightHand.worldMatrix, [0, -.6, 0]);
+  
+  rightHand.localMatrix = mat4Scale(mat4Identity(), [.5, .5, .5]);
+  
+  // LEFT THIGH - world matrix
+  leftThigh.worldMatrix = mat4Identity();
+  leftThigh.worldMatrix = mat4Translate(leftThigh.worldMatrix, [-.6, -1.1, 0]);
+  leftThigh.worldMatrix = mat4RotateZ(leftThigh.worldMatrix, -.2);
+  leftThigh.worldMatrix = mat4RotateX(leftThigh.worldMatrix, -swing);
+  
+  leftThigh.localMatrix = mat4Scale(mat4Identity(), [0.25, 0.6, 0.25]);
+  
+  // LEFT LEG - world matrix
+  leftLeg.worldMatrix = mat4Identity();
+  leftLeg.worldMatrix = mat4Translate(leftLeg.worldMatrix, [0, -.9, 0]);
+  leftLeg.worldMatrix = mat4RotateX(leftLeg.worldMatrix, -swing);
+  
+  leftLeg.localMatrix = mat4Scale(mat4Identity(), [.4, .4, .4]);
+  
+  // RIGHT THIGH - world matrix
+  rightThigh.worldMatrix = mat4Identity();
+  rightThigh.worldMatrix = mat4Translate(rightThigh.worldMatrix, [.6, -1.1, 0]);
+  rightThigh.worldMatrix = mat4RotateZ(rightThigh.worldMatrix, .2);
+  rightThigh.worldMatrix = mat4RotateX(rightThigh.worldMatrix, swing);
+  
+  rightThigh.localMatrix = mat4Scale(mat4Identity(), [0.25, 0.6, 0.25]);
+  
+  // RIGHT LEG - world matrix
+  rightLeg.worldMatrix = mat4Identity();
+  rightLeg.worldMatrix = mat4Translate(rightLeg.worldMatrix, [0, -.9, 0]);
+  rightLeg.worldMatrix = mat4RotateX(rightLeg.worldMatrix, swing);
+  
+  rightLeg.localMatrix = mat4Scale(mat4Identity(), [.4, .4, .4]);
+
+      drawNode(body, null);
+  for (let obj of objects) {
+
+      gl.uniform1f(uAmbientStrength, 1.8);
+      gl.uniform1f(uDiffuseStrength, 0.0);
+      gl.uniform1f(uSpecularStrength, 1);
+      gl.uniform1f(uShininess, 0.1);
+    
+      obj.z += obj.speed * gameSpeed;
+      obj.x += obj.xspeed * gameSpeed;
+      rot += rot_speed;
+
+  if (Math.abs(obj.x - cubeX) < 0.9 && Math.abs(obj.z - -1) < 0.9) {
+    for(let gingy of objects){
+      gingy.speed = 0 ;
+      gingy.xspeed = 0;
+      rot_speed = 0;
+      step = 0;
+      dead = 1;
+    }
+  }
+  if(obj.z > 4){
+    obj.z = -100;
+    positions(obj);
+  }
+
+  genObject(obj);
+
+}
+if (dead == 1) {
+  scale += 0.01;
+  floorVideo.playbackRate = 0; 
+}
+  if (floorVideo.readyState >= floorVideo.HAVE_CURRENT_DATA) {
+    gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, floorVideo);
+  }
+  
+  let floorModel = mat4Identity();
+  gl.uniformMatrix4fv(uMTM, false, floorModel);
+  let floorNormalMatrix = computeNormalMatrix(modelViewMatrix, floorModel);
+  gl.uniformMatrix4fv(uNormalMatrix, false, floorNormalMatrix);
+
+  floorModel = mat4Scale(mat4Identity(), [0, 0, 50]);
+  drawShape(planeBuffer);
+
+}
+
+    // Initialize when page loads
+    window.onload = function () {
+      setInterval(render, 20);
+    };
+</script>
+
+</body>
+</html>
