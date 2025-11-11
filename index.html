@@ -197,15 +197,15 @@ void main() {
     let score = 0;
 
     const textures = {
-      cube: loadTexture('https://i.imgur.com/uMyl4LU.png'),
-      sphere: loadTexture('https://i.imgur.com/5gen7ae.jpeg'),
-      cylinder: loadTexture('https://i.imgur.com/1E0khs7.jpeg'),
-      donut: loadTexture('https://i.imgur.com/uYrWht7.jpeg'),
+      cube: loadTexture('textures/brick.png'),
+      sphere: loadTexture('textures/angry.jpg'),
+      cylinder: loadTexture('textures/tnt.jpg'),
+      donut: loadTexture('textures/tire.jpg'),
       //floor: loadTexture('textures/grid.png')
     };
 
     const floorVideo = document.createElement('video');
-    floorVideo.src = 'https://i.imgur.com/rcPMVGR.mp4';
+    floorVideo.src = 'textures/floor_vid.mp4';
     floorVideo.crossOrigin = "anonymous"; 
     floorVideo.loop = true;
     floorVideo.muted = true;
@@ -710,3 +710,4 @@ if (dead == 1) {
 
 </body>
 </html>
+
